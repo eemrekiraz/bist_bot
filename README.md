@@ -56,3 +56,12 @@ python scripts/check_public_safety.py
 ```
 
 Güvenlik kuralları: [SECURITY.md](SECURITY.md).
+
+## Geliştirmeyi devralma
+
+Claude Code için proje kuralları [CLAUDE.md](CLAUDE.md) dosyasındadır.
+Mevcut durum, kullanıcı tercihleri ve henüz yapılmamış öğrenme altyapısı
+[proje devir özetinde](docs/PROJECT_HANDOFF.md) açıklanır.
+Eğitim sabit takvimle değil, ihtiyaç oluştuğunda ve kullanıcının açık başlatma
+talimatıyla yerel bilgisayarında yapılacak şekilde tasarlanmalıdır; bu sürümde
+henüz otomatik eğitim veya eğitim ihtiyacı bildirimi bulunmaz.
