@@ -34,3 +34,4 @@ outputs/
 .dev.vars*
 cloudflare/reports/
 node_modules/
+build/

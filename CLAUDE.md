@@ -36,7 +36,8 @@ konuşmaların otomatik aktarımı değil; doğrulanabilir proje bağlamıdır.
 - Veri yenileme, eğitim ihtiyacı değerlendirmesi ve model eğitimi ayrı işlemlerdir.
   Eğitim ihtiyacı düzenli kontrol edilebilir; bu, otomatik eğitim izni değildir.
 - İhtiyaç oluşursa yalnızca yöneticiye gerekçeli, tekrarsız Telegram bildirimi
-  planlanır. Bu özellik henüz mevcut sürümde uygulanmış değildir.
+  gönderilir. Kod `training_need.py` ve `recommendation_jobs.py` içindedir; eşik
+  dosyası (`training_policy.json`) olmadan karar verilmez ve bildirim gitmez.
 - Eğitim kullanıcının açık başlatma talimatıyla güçlü yerel bilgisayarında
   yapılmalı; VDS, Worker veya GitHub Actions üzerinde ağır eğitim başlatma.
 - Yeni yöntemi ancak zaman-kör, maliyetli, BIST/sektör karşılaştırmalı ve farklı
@@ -51,8 +52,9 @@ konuşmaların otomatik aktarımı değil; doğrulanabilir proje bağlamıdır.
 - Günlük veri/rapor yenilemesi 19.31 Türkiye saati için planlıdır; bu eğitim değildir.
 - 12 aylık fiyat seviyeleri geçmiş oynaklık senaryosudur. Eğitilmiş model tahmini,
   adil değer, güvenilir olasılık aralığı veya yıl içi minimum/maksimum diye sunma.
-- Sıradaki iş öneri kayıtları, gerçekleşen sonuçlar, karşılaştırmalı değerlendirme
-  ve ihtiyaca bağlı eğitim bildirimi altyapısıdır. Ayrıntılar devir özetindedir.
+- Öneri defteri, olgun sonuç değerlendirmesi ve eğitim ihtiyacı kontrolü kodda
+  var; defter `recommendation-ledger` veri dalında tutulur. Ayrıntı:
+  `docs/RECOMMENDATION_LEDGER.md`. Eşikler gerçek sonuçlar birikince belirlenecek.
 
 ## Doğrulama ve yayın
 
@@ -64,7 +66,7 @@ node --test cloudflare/worker.test.mjs
 python scripts/check_public_safety.py
 ```
 
-- Son doğrulamada 75 Python testi ve 9 Worker testi geçti; yeni değişikliklerde
+- Son doğrulamada 91 Python testi ve 9 Worker testi geçti; yeni değişikliklerde
   yeniden çalıştır. Eski özel projenin test sayısını bu sürüme ait gibi raporlama.
 - Dağıtım `.github/workflows/public-telegram.yml` ile yapılır. Kod değişikliği
   tek başına canlıya yansımaz; mevcut görev otomatik olarak her push'ta yayın yapmaz.
