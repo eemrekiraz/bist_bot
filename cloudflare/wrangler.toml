@@ -1,0 +1,13 @@
+name = "bist-ai-radar-public"
+main = "worker.mjs"
+compatibility_date = "2026-11-27"
+workers_dev = true
+preview_urls = false
+
+[assets]
+directory = "./reports"
+binding = "REPORTS"
+run_worker_first = true
+
+[secrets]
+required = ["TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_CHAT_ID", "TELEGRAM_BOT_TOKEN"]

@@ -1,0 +1,146 @@
+name: Public Telegram radar
+
+on:
+  schedule:
+    - cron: '31 16 * * *'
+  workflow_dispatch:
+    inputs:
+      scan_only:
+        description: Verify the scan and build reports without deploying
+        type: boolean
+        default: false
+      activate_telegram:
+        description: Attach the configured Telegram bot to this Worker
+        type: boolean
+        default: false
+      workers_subdomain:
+        description: Register this workers.dev subdomain if the account has none
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-telegram-production
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: sqlite:///data/public-cloud.sqlite3
+      PUBLIC_RESEARCH_ENABLED: 'true'
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify deployment configuration
+        if: github.event_name != 'workflow_dispatch' || !inputs.scan_only
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          for variable in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID TELEGRAM_WEBHOOK_SECRET TELEGRAM_CHAT_ID TELEGRAM_BOT_TOKEN; do
+            if [[ -z "${!variable}" ]]; then
+              echo "::error::Missing GitHub Actions secret: $variable"
+              exit 1
+            fi
+          done
+      - name: Register workers.dev address if requested
+        if: github.event_name == 'workflow_dispatch' && !inputs.scan_only && inputs.workers_subdomain != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKERS_SUBDOMAIN: ${{ inputs.workers_subdomain }}
+        run: |
+          node --input-type=module <<'JS'
+          const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, WORKERS_SUBDOMAIN } = process.env;
+          const validSubdomain = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+          if (!/^[a-f0-9]{32}$/i.test(CLOUDFLARE_ACCOUNT_ID) || !validSubdomain.test(WORKERS_SUBDOMAIN)) {
+            throw new Error('Invalid Cloudflare account ID or workers.dev subdomain.');
+          }
+          const endpoint = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain`;
+          const headers = { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`, 'Content-Type': 'application/json' };
+          const describe = (response, payload) => `HTTP ${response.status}; codes ${(payload.errors ?? []).map(error => Number(error.code)).join(', ')}`;
+          const current = await fetch(endpoint, { headers, redirect: 'error', signal: AbortSignal.timeout(30000) });
+          const existing = await current.json();
+          if (current.ok && existing.success && validSubdomain.test(existing.result?.subdomain ?? '')) {
+            console.log(`Using existing ${existing.result.subdomain}.workers.dev address.`);
+          } else {
+            if (![400, 404].includes(current.status) || !existing.errors?.some(error => error.code === 10007)) {
+              throw new Error(`Could not read workers.dev address (${describe(current, existing)}).`);
+            }
+            const created = await fetch(endpoint, {
+              method: 'PUT', headers, redirect: 'error', signal: AbortSignal.timeout(30000),
+              body: JSON.stringify({ subdomain: WORKERS_SUBDOMAIN }),
+            });
+            const registration = await created.json();
+            if (!created.ok || !registration.success || registration.result?.subdomain !== WORKERS_SUBDOMAIN) {
+              throw new Error(`Could not register workers.dev address (${describe(created, registration)}).`);
+            }
+            console.log(`Registered ${WORKERS_SUBDOMAIN}.workers.dev.`);
+          }
+          JS
+      - uses: actions/cache/restore@v4
+        with:
+          path: data/public-cloud.sqlite3
+          key: public-market-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: public-market-v1-
+      - name: Collect price, financial, and news data
+        run: |
+          python -m pip install .
+          python -m bist_ai_radar.public_jobs public-cloud-refresh
+          python -m bist_ai_radar.public_jobs public-cloud-news
+          python -m bist_ai_radar.public_worker_export cloudflare/reports
+      - name: Check cache before sharing
+        run: python scripts/check_public_cache.py data/public-cloud.sqlite3
+      - uses: actions/cache/save@v4
+        with:
+          path: data/public-cloud.sqlite3
+          key: public-market-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Deploy Worker and reports
+        if: github.event_name != 'workflow_dispatch' || !inputs.scan_only
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          umask 077
+          bindings=$(mktemp)
+          trap 'rm -f "$bindings"' EXIT
+          python -c 'import json, os; print(json.dumps({key: os.environ[key] for key in ("TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_CHAT_ID", "TELEGRAM_BOT_TOKEN")}))' > "$bindings"
+          npx --yes wrangler@4.168.0 deploy --config cloudflare/wrangler.toml --secrets-file "$bindings"
+      - name: Verify published interactive menus
+        if: github.event_name != 'workflow_dispatch' || !inputs.scan_only
+        env:
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          PUBLIC_BOT_WORKER_URL: ${{ vars.PUBLIC_BOT_WORKER_URL }}
+        run: |
+          python - <<'PY'
+          import os
+          from bist_ai_radar.public_worker_register import verify_public_menus
+          origin = os.environ["PUBLIC_BOT_WORKER_URL"].rstrip("/")
+          verify_public_menus(origin, os.environ["TELEGRAM_WEBHOOK_SECRET"])
+          PY
+      - name: Activate Telegram webhook
+        if: github.event_name == 'workflow_dispatch' && !inputs.scan_only && inputs.activate_telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          PUBLIC_BOT_WORKER_URL: ${{ vars.PUBLIC_BOT_WORKER_URL }}
+        run: python -m bist_ai_radar.public_worker_register
