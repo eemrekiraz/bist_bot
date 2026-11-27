@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 
 from .adapters import KapFinancialFeed, KapJsonFeed, KapUniverseFeed, YahooFinanceFeed
@@ -11,11 +11,15 @@ from .config import load_settings
 from .db import connect, init_db
 from .macro_news import refresh_macro_news
 from .public_research import ISTANBUL, last_completed_session, publish_public_snapshot
+from .recommendation_outcomes import BENCHMARK_SYMBOL
 from .repositories import MarketRepository
 from .source_health import record_source_failure, record_source_success
 from .symbol_source_health import (
     record_symbol_source_failure, record_symbol_source_success, symbol_source_attempt_allowed,
 )
+
+BENCHMARK_YAHOO_SYMBOL = "XU100.IS"
+
 
 @dataclass(frozen=True)
 class FinancialUniverseScanResult:
@@ -266,6 +270,7 @@ def public_close_refresh(*, price_budget_seconds: int | None = None) -> None:
             missed = 0
         finally:
             time.sleep(0.5)
+    refresh_benchmark(feed, completed_day)
     publish_public_snapshot()
     if symbols:
         if deadline is None:
@@ -273,6 +278,24 @@ def public_close_refresh(*, price_budget_seconds: int | None = None) -> None:
         else:
             financial_universe_scan(batch_size=24, time_budget_seconds=240)
         publish_public_snapshot()
+
+def refresh_benchmark(feed: YahooFinanceFeed, completed_day: date) -> bool:
+    """Store BIST 100 closes so matured recommendations can be compared with it."""
+    try:
+        bars = [
+            bar for bar in feed.read_price_bars(BENCHMARK_YAHOO_SYMBOL, days=400)
+            if bar.day <= completed_day
+        ]
+    except Exception as error:
+        print(f"Benchmark refresh failed: {error}")
+        return False
+    if not bars:
+        return False
+    bars = [replace(bar, symbol=BENCHMARK_SYMBOL) for bar in bars]
+    with connect() as connection:
+        MarketRepository(connection).upsert_refreshed_price_bars(bars)
+    return True
+
 
 def main() -> None:
     command = sys.argv[1] if len(sys.argv) > 1 else ""

@@ -125,6 +125,14 @@ jobs:
           trap 'rm -f "$bindings"' EXIT
           python -c 'import json, os; print(json.dumps({key: os.environ[key] for key in ("TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_CHAT_ID", "TELEGRAM_BOT_TOKEN")}))' > "$bindings"
           npx --yes wrangler@4.168.0 deploy --config cloudflare/wrangler.toml --secrets-file "$bindings"
+      - name: Keep the published snapshot for the ledger job
+        if: github.event_name != 'workflow_dispatch' || !inputs.scan_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-research-snapshot
+          path: data/report_snapshots/public-research.json
+          retention-days: 1
+          if-no-files-found: error
       - name: Verify published interactive menus
         if: github.event_name != 'workflow_dispatch' || !inputs.scan_only
         env:
@@ -144,3 +152,82 @@ jobs:
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
           PUBLIC_BOT_WORKER_URL: ${{ vars.PUBLIC_BOT_WORKER_URL }}
         run: python -m bist_ai_radar.public_worker_register
+
+  # Recommendation ledger. Runs only after the refresh job published and
+  # verified the bot, so only recommendations users actually saw are recorded.
+  # Durable store: the orphan data branch below. Pushes are fast-forward only
+  # and may only add lines to the ledger file.
+  ledger:
+    needs: refresh
+    if: github.event_name != 'workflow_dispatch' || !inputs.scan_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      DATABASE_URL: sqlite:///data/public-cloud.sqlite3
+      LEDGER_BRANCH: recommendation-ledger
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache/restore@v4
+        with:
+          path: data/public-cloud.sqlite3
+          key: public-market-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: published-research-snapshot
+          path: data/report_snapshots
+      - name: Install
+        run: python -m pip install .
+      - name: Restore ledger from data branch
+        run: |
+          set -euo pipefail
+          repo="https://github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$repo" "$LEDGER_BRANCH" >/dev/null; then
+            git clone --quiet --single-branch --branch "$LEDGER_BRANCH" "$repo" data/ledger
+          else
+            git init --quiet --initial-branch "$LEDGER_BRANCH" data/ledger
+          fi
+      - name: Record published recommendations
+        run: python -m bist_ai_radar.recommendation_jobs record data/ledger
+      - name: Evaluate matured outcomes
+        continue-on-error: true
+        run: python -m bist_ai_radar.recommendation_jobs evaluate data/ledger
+      - name: Check training need (administrator notice only, never trains)
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m bist_ai_radar.recommendation_jobs training-check data/ledger --send
+      - name: Publish ledger to data branch
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd data/ledger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Ledger unchanged."
+            exit 0
+          fi
+          if git rev-parse --verify --quiet HEAD >/dev/null; then
+            removed=$(git diff --cached --numstat -- recommendations.jsonl | awk '{print $2}')
+            if [[ -n "$removed" && "$removed" != "0" ]]; then
+              echo "::error::Ledger lines were changed or removed; refusing to publish."
+              exit 1
+            fi
+          fi
+          git commit --quiet -m "Ledger update $(date -u +%Y-%m-%dT%H:%MZ)"
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" push --quiet \
+            "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$LEDGER_BRANCH"

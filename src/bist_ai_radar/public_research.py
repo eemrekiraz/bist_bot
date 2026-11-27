@@ -21,6 +21,10 @@ from .repositories import MarketRepository
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 SNAPSHOT_KEY = "public-research"
 SNAPSHOT_MAX_AGE = 7 * 24 * 3600
+# Bump whenever eligibility, scoring or portfolio selection rules change, so the
+# recommendation ledger can tell which method produced each recommendation.
+METHOD_NAME = "public_financial_technical_portfolio"
+METHOD_VERSION = "2026.11.1"
 CONTEXT = "Genel araştırma • Kişiye özel yatırım tavsiyesi değildir."
 PORTFOLIO_LABELS = {"dengeli": "Dengeli", "kalite": "Finansal kalite", "buyume": "Büyüme"}
 PUBLIC_COMMANDS = {
@@ -202,6 +206,7 @@ def _company(repository: MarketRepository, symbol: str, now: datetime) -> dict:
         "sector": sector or "Sektör bilgisi yok",
         "news": _kap_highlights(repository, symbol, now),
         "day": bars[-1].day.isoformat() if bars else "",
+        "close": bars[-1].trade_close if bars else None,
         "period": "",
         "eligible": False,
         "reasons": [],
@@ -494,6 +499,27 @@ def public_report(command: str, args: list[str], now: datetime | None = None) ->
     return render_public_report(snapshot, command, argument, now or datetime.now(ISTANBUL))
 
 
+def eligible_candidates(companies: list[dict], checked_at: datetime) -> list[dict]:
+    oldest = _oldest_price_day(checked_at).isoformat()
+    return [item for item in companies if item["eligible"] and item["day"] >= oldest]
+
+
+def select_portfolio(candidates: list[dict], profile: str, size: int = 5) -> list[dict]:
+    """Highest-scoring candidates, at most one per main sector."""
+    ordered = sorted(candidates, key=lambda item: (-item["scores"][profile], item["symbol"]))
+    selected = []
+    sectors = set()
+    for item in ordered:
+        sector = sector_key(item["sector"]) or normalize(item["sector"])
+        if sector in sectors:
+            continue
+        selected.append(item)
+        sectors.add(sector)
+        if len(selected) == size:
+            break
+    return selected
+
+
 def render_public_report(snapshot: dict, command: str, argument: str, checked_at: datetime) -> str:
     profile = normalize(argument) or "dengeli"
     symbol = argument.upper().removesuffix(".IS")
@@ -533,17 +559,7 @@ def render_public_report(snapshot: dict, command: str, argument: str, checked_at
     candidates = [item for item in companies if item["eligible"] and item["day"] >= oldest]
     if command == "sektor":
         return _sector_report(companies, candidates, argument, header)
-    ordered = sorted(candidates, key=lambda item: (-item["scores"][profile], item["symbol"]))
-    selected = []
-    sectors = set()
-    for item in ordered:
-        sector = sector_key(item["sector"]) or normalize(item["sector"])
-        if sector in sectors:
-            continue
-        selected.append(item)
-        sectors.add(sector)
-        if len(selected) == 5:
-            break
+    selected = select_portfolio(candidates, profile)
     title = f"Örnek portföy • {PORTFOLIO_LABELS[profile]}"
     coverage = f"• İncelenen: {len(companies)} şirket\n• Ölçütleri geçen: {len(candidates)} şirket\n• Seçim: farklı ana sektörler"
     lines = [f"{index}. " + _company_summary(item, include_news=False, show_score=True, score_profile=profile)

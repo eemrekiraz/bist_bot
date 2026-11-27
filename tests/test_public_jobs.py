@@ -44,3 +44,23 @@ class PublicJobsTests(unittest.TestCase):
         with patch.object(sys, "argv", ["public_jobs", "train-model"]):
             with self.assertRaisesRegex(SystemExit, "Use public-cloud-refresh"):
                 public_jobs.main()
+
+    def test_benchmark_is_stored_under_its_own_symbol(self) -> None:
+        from datetime import date
+        from unittest.mock import MagicMock
+        from bist_ai_radar.models import PriceBar
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {"DATABASE_URL": f"sqlite:///{Path(directory) / 'test.sqlite3'}"}):
+            init_db()
+            feed = MagicMock()
+            feed.read_price_bars.return_value = [
+                PriceBar("XU100.IS", date(2026, 11, 26), 1, 1, 1, 1, 0),
+                PriceBar("XU100.IS", date(2026, 11, 28), 1, 1, 1, 1, 0),
+            ]
+            self.assertTrue(public_jobs.refresh_benchmark(feed, date(2026, 11, 27)))
+            feed.read_price_bars.assert_called_once_with("XU100.IS", days=400)
+            with connect() as connection:
+                rows = connection.execute("SELECT symbol, day FROM price_bars").fetchall()
+            self.assertEqual([(row["symbol"], row["day"]) for row in rows], [("XU100", "2026-11-26")])
+            feed.read_price_bars.side_effect = RuntimeError("offline")
+            self.assertFalse(public_jobs.refresh_benchmark(feed, date(2026, 11, 27)))
+

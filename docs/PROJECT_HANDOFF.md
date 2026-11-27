@@ -59,9 +59,10 @@ kontrolünde gerçek yönetici kimliği GitHub/Cloudflare secret alanlarından g
 - Sıfır logaritmik sürüklenme varsayılır. Bu, temel değerleme veya eğitilmiş
   tahmin değildir; aralığın aşılma olasılığı kalibre edilmemiştir. Yıl içi görülecek
   en düşük/en yüksek fiyatı söylemez. Yetersiz/geçersiz/sabit/aşırı oynak seride hesaplanmaz.
-- **Bağlı bir ML eğitim/öğrenme döngüsü yoktur.** Öneri sonuçlarının kalıcı
-  kaydı, gerçekleşen başarıya göre öğrenme ve yeni eğitim ihtiyacı bildirimi de
-  henüz uygulanmış değildir. Veri yenilenmesi bu eksikleri kendiliğinden tamamlamaz.
+- **Bağlı bir ML eğitim/öğrenme döngüsü yoktur.** Gerçekleşen başarıya göre
+  öğrenme yoktur. Öneri defteri, olgun sonuç değerlendirmesi ve eğitim ihtiyacı
+  bildirimi kodda vardır (bkz. `docs/RECOMMENDATION_LEDGER.md`); eşik dosyası
+  olmadığı için henüz karar veya bildirim üretmez.
 
 ## 4. Eğitimle ilgili son kullanıcı kararı
 
@@ -77,6 +78,10 @@ bot kullanıcıları görmemeli. Aynı ihtiyaç için tekrar tekrar bildirim at�
 Bunlar tamamlanmış özellik değil, sonraki geliştirme gereksinimleridir.
 
 ## 5. Sıradaki geliştirmeler ve kabul ölçütleri
+
+> Durum (27 Kasım 2026): 1–5. maddelerin altyapısı PR #2 ile eklendi. Kalıcılık
+> için kullanıcı aynı depoda ayrı `recommendation-ledger` veri dalını seçti.
+> Eşikler ve 6. madde (yerel aday eğitimi) yapılmadı.
 
 1. **Değişmez öneri defteri:** Yayın zamanı, veri kesim zamanı, hisse, ana/özgün
    sektör, kapanış tarihi/fiyatı, gerekçe, kullanılan yöntem ve sürümü kaydedilmeli.
